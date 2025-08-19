@@ -626,6 +626,8 @@
         function enableUploadButton() {
             const uploadBtn = document.getElementById('uploadBtn');
             uploadBtn.style.display = 'block';
+            // Remove existing event listener to prevent double-click issue
+            uploadBtn.removeEventListener('click', uploadBills);
             uploadBtn.addEventListener('click', uploadBills);
         }
 
@@ -637,82 +639,151 @@
             try {
                 isProcessing = true;
                 const uploadBtn = document.getElementById('uploadBtn');
-                const originalText = uploadBtn.innerHTML;
                 
                 uploadBtn.disabled = true;
-                uploadBtn.innerHTML = '<span class="loading"></span> Processing...';
+                uploadBtn.innerHTML = '<span class="loading"></span> Preparing data...';
                 
                 let successCount = 0;
                 let errorCount = 0;
                 let duplicateCount = 0;
                 
-                // Check existing bills
-                const existingBills = await database.ref('bills').once('value');
-                const existingInvoiceNos = new Set();
+                // Step 1: Get all existing data in parallel
+                uploadBtn.innerHTML = '<span class="loading"></span> Checking existing data...';
+                const [existingBillsSnapshot, existingLedgersSnapshot, existingPartiesSnapshot] = await Promise.all([
+                    database.ref('bills').once('value'),
+                    database.ref('ledgers').once('value'),
+                    database.ref('parties').once('value')
+                ]);
                 
-                if (existingBills.exists()) {
-                    Object.values(existingBills.val()).forEach(bill => {
+                // Build lookup maps for fast checking
+                const existingInvoiceNos = new Set();
+                const existingLedgers = new Map(); // partyName -> {key, data}
+                const existingParties = new Set();
+                
+                if (existingBillsSnapshot.exists()) {
+                    Object.values(existingBillsSnapshot.val()).forEach(bill => {
                         if (bill.invoiceNo) {
                             existingInvoiceNos.add(bill.invoiceNo);
                         }
                     });
                 }
                 
-                // Process each bill
-                for (let i = 0; i < uploadedExcelData.length; i++) {
-                    const bill = uploadedExcelData[i];
-                    
-                    try {
-                        if (existingInvoiceNos.has(bill.invoiceNo)) {
-                            duplicateCount++;
-                            continue;
-                        }
-                        
-                        uploadBtn.innerHTML = `<span class="loading"></span> Processing ${i + 1}/${uploadedExcelData.length}...`;
-                        
-                        // Save bill
-                        await database.ref('bills').push(bill);
-                        
-                        // Update ledger
-                        const partyName = bill.partyName;
-                        if (partyName && partyName.toUpperCase() !== 'CASH') {
-                            const ledgerSnapshot = await database.ref('ledgers').orderByChild('partyName').equalTo(partyName).once('value');
-                            const ledgers = ledgerSnapshot.val();
-                            
-                            if (ledgers) {
-                                const ledgerKey = Object.keys(ledgers)[0];
-                                const existingLedger = ledgers[ledgerKey];
-                                
-                                await database.ref('ledgers/' + ledgerKey).update({
-                                    totalAmount: (existingLedger.totalAmount || 0) + bill.amount,
-                                    lastTransactionDate: bill.date
-                                });
-                            } else {
-                                await database.ref('ledgers').push({
-                                    partyName: partyName,
-                                    totalAmount: bill.amount,
-                                    lastTransactionDate: bill.date,
-                                    createdDate: bill.date
-                                });
-                            }
-                            
-                            // Add party if not exists
-                            const partySnapshot = await database.ref('parties').orderByChild('name').equalTo(partyName).once('value');
-                            if (!partySnapshot.exists()) {
-                                await database.ref('parties').push({
-                                    name: partyName,
-                                    createdDate: bill.date
-                                });
-                            }
-                        }
-                        
-                        successCount++;
-                        existingInvoiceNos.add(bill.invoiceNo);
-                        
-                    } catch (error) {
-                        console.error('Error processing bill:', bill, error);
-                        errorCount++;
+                if (existingLedgersSnapshot.exists()) {
+                    Object.entries(existingLedgersSnapshot.val()).forEach(([key, ledger]) => {
+                        existingLedgers.set(ledger.partyName, {key, data: ledger});
+                    });
+                }
+                
+                if (existingPartiesSnapshot.exists()) {
+                    Object.values(existingPartiesSnapshot.val()).forEach(party => {
+                        existingParties.add(party.name);
+                    });
+                }
+                
+                // Step 2: Filter valid bills and prepare batch data
+                uploadBtn.innerHTML = '<span class="loading"></span> Preparing batch upload...';
+                const validBills = [];
+                const ledgerUpdates = new Map(); // partyName -> amount to add
+                const newParties = new Set();
+                
+                for (const bill of uploadedExcelData) {
+                    if (existingInvoiceNos.has(bill.invoiceNo)) {
+                        duplicateCount++;
+                        continue;
                     }
+                    
+                    validBills.push(bill);
+                    
+                    // Prepare ledger updates
+                    const partyName = bill.partyName;
+                    if (partyName && partyName.toUpperCase() !== 'CASH') {
+                        if (ledgerUpdates.has(partyName)) {
+                            ledgerUpdates.set(partyName, ledgerUpdates.get(partyName) + bill.amount);
+                        } else {
+                            ledgerUpdates.set(partyName, bill.amount);
+                        }
+                        
+                        if (!existingParties.has(partyName)) {
+                            newParties.add(partyName);
+                        }
+                    }
+                }
+                
+                if (validBills.length === 0) {
+                    if (duplicateCount > 0) {
+                        showSuccessModal(0, duplicateCount, 0);
+                    } else {
+                        showError('No valid bills to upload');
+                    }
+                    resetForm();
+                    return;
+                }
+                
+                // Step 3: Batch upload bills (super fast)
+                uploadBtn.innerHTML = '<span class="loading"></span> Uploading bills...';
+                const billsRef = database.ref('bills');
+                const billPromises = validBills.map(bill => billsRef.push(bill));
+                await Promise.all(billPromises);
+                successCount = validBills.length;
+                
+                // Step 4: Batch update ledgers
+                if (ledgerUpdates.size > 0) {
+                    uploadBtn.innerHTML = '<span class="loading"></span> Updating ledgers...';
+                    const ledgerPromises = [];
+                    
+                    for (const [partyName, amountToAdd] of ledgerUpdates) {
+                        if (existingLedgers.has(partyName)) {
+                            // Update existing ledger
+                            const ledgerInfo = existingLedgers.get(partyName);
+                            const newTotal = (ledgerInfo.data.totalAmount || 0) + amountToAdd;
+                            
+                            // Find latest date for this party in the valid bills
+                            const partyBills = validBills.filter(b => b.partyName === partyName);
+                            const latestDate = partyBills.reduce((latest, bill) => 
+                                bill.date > latest ? bill.date : latest, partyBills[0].date);
+                            
+                            ledgerPromises.push(
+                                database.ref('ledgers/' + ledgerInfo.key).update({
+                                    totalAmount: newTotal,
+                                    lastTransactionDate: latestDate
+                                })
+                            );
+                        } else {
+                            // Create new ledger
+                            const partyBills = validBills.filter(b => b.partyName === partyName);
+                            const latestDate = partyBills.reduce((latest, bill) => 
+                                bill.date > latest ? bill.date : latest, partyBills[0].date);
+                            
+                            ledgerPromises.push(
+                                database.ref('ledgers').push({
+                                    partyName: partyName,
+                                    totalAmount: amountToAdd,
+                                    lastTransactionDate: latestDate,
+                                    createdDate: latestDate
+                                })
+                            );
+                        }
+                    }
+                    
+                    await Promise.all(ledgerPromises);
+                }
+                
+                // Step 5: Batch create new parties
+                if (newParties.size > 0) {
+                    uploadBtn.innerHTML = '<span class="loading"></span> Creating parties...';
+                    const partiesRef = database.ref('parties');
+                    const partyPromises = Array.from(newParties).map(partyName => {
+                        const partyBills = validBills.filter(b => b.partyName === partyName);
+                        const earliestDate = partyBills.reduce((earliest, bill) => 
+                            bill.date < earliest ? bill.date : earliest, partyBills[0].date);
+                        
+                        return partiesRef.push({
+                            name: partyName,
+                            createdDate: earliestDate
+                        });
+                    });
+                    
+                    await Promise.all(partyPromises);
                 }
                 
                 showSuccessModal(successCount, duplicateCount, errorCount);

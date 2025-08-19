@@ -418,8 +418,19 @@
         let uploadedExcelData = null;
         let isProcessing = false;
 
-        // File upload handling
-        document.getElementById('excelInput').addEventListener('change', handleFileSelect);
+        // Fix double file upload issue by removing and re-adding event listener
+        function initializeFileUpload() {
+            const fileInput = document.getElementById('excelInput');
+            
+            // Remove existing event listeners
+            fileInput.removeEventListener('change', handleFileSelect);
+            
+            // Add fresh event listener
+            fileInput.addEventListener('change', handleFileSelect);
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', initializeFileUpload);
 
         // Drag and drop
         const uploadArea = document.querySelector('.file-upload-area');
@@ -490,7 +501,8 @@
                 
                 const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
                     range: 9,
-                    defval: ''
+                    defval: '',
+                    header: 1
                 });
                 
                 if (jsonData.length === 0) {
@@ -518,14 +530,30 @@
         function parseExcelData(jsonData) {
             const bills = [];
             let currentDate = null;
+            let skipLines = 0;
             
             for (let i = 0; i < jsonData.length; i++) {
                 const row = jsonData[i];
-                const rowValues = Object.values(row);
-                const firstValue = rowValues[0];
+                
+                // Skip lines after page break
+                if (skipLines > 0) {
+                    skipLines--;
+                    continue;
+                }
+                
+                if (!row || row.length === 0) continue;
+                
+                const firstValue = row[0];
+                
+                // Check for page break (SUB TOTAL)
+                if (firstValue && firstValue.toString().toLowerCase().includes('sub total')) {
+                    skipLines = 7; // Skip next 7 lines after SUB TOTAL
+                    continue;
+                }
                 
                 // Stop if we hit TOTAL row
-                if (firstValue && firstValue.toString().toLowerCase().includes('total')) {
+                if (firstValue && firstValue.toString().toLowerCase().includes('total') && 
+                    !firstValue.toString().toLowerCase().includes('sub total')) {
                     break;
                 }
                 
@@ -536,13 +564,13 @@
                 }
                 
                 // Extract bill data
-                let invoiceNo = rowValues[0];
-                let partyName = rowValues[1];
-                let netAmount = parseFloat(rowValues[4]) || 0;
-                let taxAmount = parseFloat(rowValues[5]) || 0;
+                let invoiceNo = row[0];
+                let partyName = row[1];
+                let netAmount = parseFloat(row[4]) || 0;
+                let taxAmount = parseFloat(row[5]) || 0;
                 
-                // Validation
-                if (!invoiceNo || !partyName || netAmount <= 0 || !currentDate) {
+                // Validation - Accept both positive and negative amounts (for CN - Credit Notes)
+                if (!invoiceNo || !partyName || netAmount === 0 || isNaN(netAmount) || !currentDate) {
                     continue;
                 }
                 
@@ -551,11 +579,6 @@
                 }
                 
                 if (partyName.trim().replace(/[-\s]/g, '') === '') {
-                    continue;
-                }
-                
-                // Check for duplicates
-                if (bills.some(bill => bill.invoiceNo === invoiceNo.toString())) {
                     continue;
                 }
                 
@@ -570,14 +593,27 @@
                     discount: 0,
                     amount: finalAmount,
                     timestamp: Date.now(),
-                    type: 'bill',
-                    source: 'excel_upload'
+                    type: finalAmount >= 0 ? 'bill' : 'credit_note', // Mark negative amounts as credit notes
+                    source: 'excel_upload',
+                    financialYear: getFinancialYear(currentDate)
                 };
                 
                 bills.push(bill);
             }
             
             return bills;
+        }
+
+        function getFinancialYear(dateString) {
+            const date = new Date(dateString);
+            const month = date.getMonth() + 1; // JavaScript months are 0-indexed
+            const year = date.getFullYear();
+            
+            if (month >= 4) { // April to March financial year
+                return `${year}-${(year + 1).toString().slice(-2)}`;
+            } else {
+                return `${year - 1}-${year.toString().slice(-2)}`;
+            }
         }
 
         function isValidDate(dateString) {
@@ -626,9 +662,13 @@
         function enableUploadButton() {
             const uploadBtn = document.getElementById('uploadBtn');
             uploadBtn.style.display = 'block';
-            // Remove existing event listener to prevent double-click issue
-            uploadBtn.removeEventListener('click', uploadBills);
-            uploadBtn.addEventListener('click', uploadBills);
+            
+            // Remove existing event listeners to prevent double-click issue
+            const newUploadBtn = uploadBtn.cloneNode(true);
+            uploadBtn.parentNode.replaceChild(newUploadBtn, uploadBtn);
+            
+            // Add single event listener
+            newUploadBtn.addEventListener('click', uploadBills);
         }
 
         async function uploadBills() {
@@ -647,7 +687,7 @@
                 let errorCount = 0;
                 let duplicateCount = 0;
                 
-                // Step 1: Get all existing data in parallel
+                // Step 1: Get existing bills to check for duplicates
                 uploadBtn.innerHTML = '<span class="loading"></span> Checking existing data...';
                 const [existingBillsSnapshot, existingLedgersSnapshot, existingPartiesSnapshot] = await Promise.all([
                     database.ref('bills').once('value'),
@@ -655,15 +695,19 @@
                     database.ref('parties').once('value')
                 ]);
                 
-                // Build lookup maps for fast checking
-                const existingInvoiceNos = new Set();
-                const existingLedgers = new Map(); // partyName -> {key, data}
+                // Build lookup maps for duplicate checking (invoice + financial year)
+                const existingBillKeys = new Set();
+                const existingLedgers = new Map();
                 const existingParties = new Set();
                 
                 if (existingBillsSnapshot.exists()) {
                     Object.values(existingBillsSnapshot.val()).forEach(bill => {
-                        if (bill.invoiceNo) {
-                            existingInvoiceNos.add(bill.invoiceNo);
+                        if (bill.invoiceNo && bill.financialYear) {
+                            existingBillKeys.add(`${bill.invoiceNo}_${bill.financialYear}`);
+                        } else if (bill.invoiceNo && bill.date) {
+                            // For old bills without financialYear, calculate it
+                            const fy = getFinancialYear(bill.date);
+                            existingBillKeys.add(`${bill.invoiceNo}_${fy}`);
                         }
                     });
                 }
@@ -683,11 +727,13 @@
                 // Step 2: Filter valid bills and prepare batch data
                 uploadBtn.innerHTML = '<span class="loading"></span> Preparing batch upload...';
                 const validBills = [];
-                const ledgerUpdates = new Map(); // partyName -> amount to add
+                const ledgerUpdates = new Map();
                 const newParties = new Set();
                 
                 for (const bill of uploadedExcelData) {
-                    if (existingInvoiceNos.has(bill.invoiceNo)) {
+                    const billKey = `${bill.invoiceNo}_${bill.financialYear}`;
+                    
+                    if (existingBillKeys.has(billKey)) {
                         duplicateCount++;
                         continue;
                     }
@@ -719,7 +765,7 @@
                     return;
                 }
                 
-                // Step 3: Batch upload bills (super fast)
+                // Step 3: Batch upload bills
                 uploadBtn.innerHTML = '<span class="loading"></span> Uploading bills...';
                 const billsRef = database.ref('bills');
                 const billPromises = validBills.map(bill => billsRef.push(bill));
@@ -844,6 +890,9 @@
             hideError();
             document.getElementById('uploadBtn').style.display = 'none';
             uploadedExcelData = null;
+            
+            // Re-initialize file upload to prevent double upload issue
+            initializeFileUpload();
         }
 
         function showError(message) {

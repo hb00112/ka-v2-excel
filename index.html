@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Data Upload</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #007AFF, #0056b3);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+
+        .upload-section {
+            padding: 40px;
+        }
+
+        .file-upload-area {
+            border: 3px dashed #007AFF;
+            border-radius: 12px;
+            padding: 60px 30px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            background: rgba(0, 122, 255, 0.05);
+        }
+
+        .file-upload-area:hover,
+        .file-upload-area.dragover {
+            border-color: #0056b3;
+            background: rgba(0, 122, 255, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .upload-icon {
+            font-size: 64px;
+            color: #007AFF;
+            margin-bottom: 20px;
+        }
+
+        .upload-text h3 {
+            color: #1d1d1f;
+            margin-bottom: 10px;
+            font-size: 22px;
+        }
+
+        .upload-text p {
+            color: #86868b;
+            margin-bottom: 20px;
+        }
+
+        .file-input-btn {
+            background: #007AFF;
+            color: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .file-input-btn:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 122, 255, 0.3);
+        }
+
+        .file-input-hidden {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+        }
+
+        .file-name-display {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(52, 199, 89, 0.1);
+            border: 1px solid rgba(52, 199, 89, 0.3);
+            border-radius: 8px;
+            color: #1d4428;
+            font-weight: 500;
+            display: none;
+        }
+
+        .preview-section {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .preview-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            color: #1d1d1f;
+        }
+
+        .preview-table {
+            border: 1px solid #d2d2d7;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .table-header {
+            background: #f5f5f7;
+            display: grid;
+            grid-template-columns: 1fr 1fr 2fr 1fr;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+
+        .table-cell {
+            padding: 15px;
+            border-right: 1px solid #d2d2d7;
+        }
+
+        .table-cell:last-child {
+            border-right: none;
+        }
+
+        .table-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 2fr 1fr;
+            border-bottom: 1px solid #d2d2d7;
+        }
+
+        .table-row:last-child {
+            border-bottom: none;
+        }
+
+        .table-row:nth-child(even) {
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .more-indicator {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 15px;
+            color: #86868b;
+            font-style: italic;
+            background: rgba(0, 122, 255, 0.05);
+        }
+
+        .upload-btn {
+            background: #34c759;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            display: none;
+            margin-top: 20px;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+
+        .upload-btn:hover:not(:disabled) {
+            background: #28a745;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 199, 89, 0.3);
+        }
+
+        .upload-btn:disabled {
+            background: #86868b;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .error-message {
+            background: rgba(255, 59, 48, 0.1);
+            border: 1px solid rgba(255, 59, 48, 0.3);
+            border-radius: 8px;
+            padding: 20px;
+            color: #d70015;
+            text-align: center;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error-message i {
+            font-size: 24px;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .success-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .success-content {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            max-width: 500px;
+            margin: 20px;
+            text-align: center;
+        }
+
+        .success-icon {
+            font-size: 64px;
+            color: #34c759;
+            margin-bottom: 20px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .stat-item {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-item.success {
+            background: rgba(52, 199, 89, 0.1);
+            border: 1px solid rgba(52, 199, 89, 0.3);
+        }
+
+        .stat-item.warning {
+            background: rgba(255, 149, 0, 0.1);
+            border: 1px solid rgba(255, 149, 0, 0.3);
+        }
+
+        .stat-item.error {
+            background: rgba(255, 59, 48, 0.1);
+            border: 1px solid rgba(255, 59, 48, 0.3);
+        }
+
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .close-btn {
+            background: #007AFF;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .table-header,
+            .table-row {
+                grid-template-columns: 1fr 2fr 1fr;
+            }
+            
+            .table-cell:nth-child(2),
+            .table-row > div:nth-child(2) {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-file-excel"></i> Excel Data Upload</h1>
+            <p>Upload your Excel file to import bill data into the system</p>
+        </div>
+
+        <div class="upload-section">
+            <div class="file-upload-area" onclick="document.getElementById('excelInput').click()">
+                <div class="upload-icon">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <div class="upload-text">
+                    <h3>Upload Excel File</h3>
+                    <p>Click here or drag & drop your .xlsx or .xls file</p>
+                    <div style="position: relative; display: inline-block;">
+                        <button class="file-input-btn">
+                            <i class="fas fa-file-excel"></i>
+                            Choose File
+                        </button>
+                        <input type="file" id="excelInput" class="file-input-hidden" accept=".xlsx,.xls">
+                    </div>
+                </div>
+            </div>
+
+            <div class="file-name-display" id="fileNameDisplay"></div>
+            <div class="error-message" id="errorMessage"></div>
+
+            <div class="preview-section" id="previewSection">
+                <div class="preview-header">
+                    <i class="fas fa-eye"></i>
+                    <h3 id="previewTitle">Preview</h3>
+                </div>
+                <div class="preview-table">
+                    <div class="table-header">
+                        <div class="table-cell">Date</div>
+                        <div class="table-cell">Invoice</div>
+                        <div class="table-cell">Party</div>
+                        <div class="table-cell">Amount</div>
+                    </div>
+                    <div id="previewBody"></div>
+                </div>
+            </div>
+
+            <button class="upload-btn" id="uploadBtn">
+                <i class="fas fa-upload"></i>
+                Upload Bills to Database
+            </button>
+        </div>
+    </div>
+
+    <div class="success-modal" id="successModal">
+        <div class="success-content">
+            <div class="success-icon">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <h2>Upload Complete!</h2>
+            <div class="stats-grid" id="statsGrid"></div>
+            <button class="close-btn" onclick="closeSuccessModal()">Done</button>
+        </div>
+    </div>
+
+    <script>
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyBfE8ILQAqlfpWMUTIuz5eIKhsZxCsFgo4",
+            authDomain: "hc-order.firebaseapp.com",
+            databaseURL: "https://hc-order-default-rtdb.firebaseio.com",
+            projectId: "hc-order",
+            storageBucket: "hc-order.firebasestorage.app",
+            messagingSenderId: "918783629071",
+            appId: "1:918783629071:web:f32af53f30d15e53e9107a",
+            measurementId: "G-K8Z2DLYSFJ"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        let uploadedExcelData = null;
+        let isProcessing = false;
+
+        // File upload handling
+        document.getElementById('excelInput').addEventListener('change', handleFileSelect);
+
+        // Drag and drop
+        const uploadArea = document.querySelector('.file-upload-area');
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            uploadArea.classList.add('dragover');
+        }
+
+        function unhighlight() {
+            uploadArea.classList.remove('dragover');
+        }
+
+        uploadArea.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        }
+
+        function handleFileSelect(e) {
+            const file = e.target.files[0];
+            if (file) {
+                handleFile(file);
+            }
+        }
+
+        function handleFile(file) {
+            hideError();
+            hidePreview();
+            
+            const fileNameDisplay = document.getElementById('fileNameDisplay');
+            fileNameDisplay.textContent = `Selected: ${file.name}`;
+            fileNameDisplay.style.display = 'block';
+
+            // Validate file type
+            if (!file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
+                showError('Please select a valid Excel file (.xlsx or .xls)');
+                return;
+            }
+
+            processExcelFile(file);
+        }
+
+        async function processExcelFile(file) {
+            try {
+                const data = await file.arrayBuffer();
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { 
+                    range: 9,
+                    defval: ''
+                });
+                
+                if (jsonData.length === 0) {
+                    showError('No data found in Excel file. Please check the format.');
+                    return;
+                }
+                
+                const parsedBills = parseExcelData(jsonData);
+                
+                if (parsedBills.length === 0) {
+                    showError('No valid bill entries found in the Excel file.');
+                    return;
+                }
+                
+                uploadedExcelData = parsedBills;
+                showPreview(parsedBills);
+                enableUploadButton();
+                
+            } catch (error) {
+                console.error('Error processing Excel file:', error);
+                showError('Error reading Excel file. Please check the file format.');
+            }
+        }
+
+        function parseExcelData(jsonData) {
+            const bills = [];
+            let currentDate = null;
+            
+            for (let i = 0; i < jsonData.length; i++) {
+                const row = jsonData[i];
+                const rowValues = Object.values(row);
+                const firstValue = rowValues[0];
+                
+                // Stop if we hit TOTAL row
+                if (firstValue && firstValue.toString().toLowerCase().includes('total')) {
+                    break;
+                }
+                
+                // Check for date row
+                if (firstValue && typeof firstValue === 'string' && isValidDate(firstValue)) {
+                    currentDate = convertToISODate(firstValue);
+                    continue;
+                }
+                
+                // Extract bill data
+                let invoiceNo = rowValues[0];
+                let partyName = rowValues[1];
+                let netAmount = parseFloat(rowValues[4]) || 0;
+                let taxAmount = parseFloat(rowValues[5]) || 0;
+                
+                // Validation
+                if (!invoiceNo || !partyName || netAmount <= 0 || !currentDate) {
+                    continue;
+                }
+                
+                if (typeof invoiceNo !== 'string' || typeof partyName !== 'string') {
+                    continue;
+                }
+                
+                if (partyName.trim().replace(/[-\s]/g, '') === '') {
+                    continue;
+                }
+                
+                // Check for duplicates
+                if (bills.some(bill => bill.invoiceNo === invoiceNo.toString())) {
+                    continue;
+                }
+                
+                const finalAmount = netAmount + taxAmount;
+                
+                const bill = {
+                    invoiceNo: invoiceNo.toString(),
+                    date: currentDate,
+                    partyName: partyName.toString(),
+                    taxableAmount: netAmount,
+                    taxAmount: taxAmount,
+                    discount: 0,
+                    amount: finalAmount,
+                    timestamp: Date.now(),
+                    type: 'bill',
+                    source: 'excel_upload'
+                };
+                
+                bills.push(bill);
+            }
+            
+            return bills;
+        }
+
+        function isValidDate(dateString) {
+            const dateRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+            return dateRegex.test(dateString);
+        }
+
+        function convertToISODate(dateString) {
+            const parts = dateString.split('/');
+            if (parts.length === 3) {
+                return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+            }
+            return dateString;
+        }
+
+        function showPreview(bills) {
+            const previewSection = document.getElementById('previewSection');
+            const previewTitle = document.getElementById('previewTitle');
+            const previewBody = document.getElementById('previewBody');
+            
+            previewTitle.textContent = `Preview (${bills.length} bills found)`;
+            previewBody.innerHTML = '';
+            
+            bills.slice(0, 10).forEach(bill => {
+                const row = document.createElement('div');
+                row.className = 'table-row';
+                row.innerHTML = `
+                    <div class="table-cell">${formatDate(bill.date)}</div>
+                    <div class="table-cell">${bill.invoiceNo}</div>
+                    <div class="table-cell">${bill.partyName}</div>
+                    <div class="table-cell">${formatCurrency(bill.amount)}</div>
+                `;
+                previewBody.appendChild(row);
+            });
+            
+            if (bills.length > 10) {
+                const moreRow = document.createElement('div');
+                moreRow.className = 'more-indicator';
+                moreRow.textContent = `... and ${bills.length - 10} more bills`;
+                previewBody.appendChild(moreRow);
+            }
+            
+            previewSection.style.display = 'block';
+        }
+
+        function enableUploadButton() {
+            const uploadBtn = document.getElementById('uploadBtn');
+            uploadBtn.style.display = 'block';
+            uploadBtn.addEventListener('click', uploadBills);
+        }
+
+        async function uploadBills() {
+            if (!uploadedExcelData || uploadedExcelData.length === 0 || isProcessing) {
+                return;
+            }
+            
+            try {
+                isProcessing = true;
+                const uploadBtn = document.getElementById('uploadBtn');
+                const originalText = uploadBtn.innerHTML;
+                
+                uploadBtn.disabled = true;
+                uploadBtn.innerHTML = '<span class="loading"></span> Processing...';
+                
+                let successCount = 0;
+                let errorCount = 0;
+                let duplicateCount = 0;
+                
+                // Check existing bills
+                const existingBills = await database.ref('bills').once('value');
+                const existingInvoiceNos = new Set();
+                
+                if (existingBills.exists()) {
+                    Object.values(existingBills.val()).forEach(bill => {
+                        if (bill.invoiceNo) {
+                            existingInvoiceNos.add(bill.invoiceNo);
+                        }
+                    });
+                }
+                
+                // Process each bill
+                for (let i = 0; i < uploadedExcelData.length; i++) {
+                    const bill = uploadedExcelData[i];
+                    
+                    try {
+                        if (existingInvoiceNos.has(bill.invoiceNo)) {
+                            duplicateCount++;
+                            continue;
+                        }
+                        
+                        uploadBtn.innerHTML = `<span class="loading"></span> Processing ${i + 1}/${uploadedExcelData.length}...`;
+                        
+                        // Save bill
+                        await database.ref('bills').push(bill);
+                        
+                        // Update ledger
+                        const partyName = bill.partyName;
+                        if (partyName && partyName.toUpperCase() !== 'CASH') {
+                            const ledgerSnapshot = await database.ref('ledgers').orderByChild('partyName').equalTo(partyName).once('value');
+                            const ledgers = ledgerSnapshot.val();
+                            
+                            if (ledgers) {
+                                const ledgerKey = Object.keys(ledgers)[0];
+                                const existingLedger = ledgers[ledgerKey];
+                                
+                                await database.ref('ledgers/' + ledgerKey).update({
+                                    totalAmount: (existingLedger.totalAmount || 0) + bill.amount,
+                                    lastTransactionDate: bill.date
+                                });
+                            } else {
+                                await database.ref('ledgers').push({
+                                    partyName: partyName,
+                                    totalAmount: bill.amount,
+                                    lastTransactionDate: bill.date,
+                                    createdDate: bill.date
+                                });
+                            }
+                            
+                            // Add party if not exists
+                            const partySnapshot = await database.ref('parties').orderByChild('name').equalTo(partyName).once('value');
+                            if (!partySnapshot.exists()) {
+                                await database.ref('parties').push({
+                                    name: partyName,
+                                    createdDate: bill.date
+                                });
+                            }
+                        }
+                        
+                        successCount++;
+                        existingInvoiceNos.add(bill.invoiceNo);
+                        
+                    } catch (error) {
+                        console.error('Error processing bill:', bill, error);
+                        errorCount++;
+                    }
+                }
+                
+                showSuccessModal(successCount, duplicateCount, errorCount);
+                resetForm();
+                
+            } catch (error) {
+                console.error('Error uploading bills:', error);
+                showError('Error uploading bills. Please try again.');
+            } finally {
+                isProcessing = false;
+                const uploadBtn = document.getElementById('uploadBtn');
+                uploadBtn.disabled = false;
+                uploadBtn.innerHTML = '<i class="fas fa-upload"></i> Upload Bills to Database';
+            }
+        }
+
+        function showSuccessModal(successCount, duplicateCount, errorCount) {
+            const modal = document.getElementById('successModal');
+            const statsGrid = document.getElementById('statsGrid');
+            
+            let statsHtml = `
+                <div class="stat-item success">
+                    <div class="stat-number">${successCount}</div>
+                    <div class="stat-label">Successfully Uploaded</div>
+                </div>
+            `;
+            
+            if (duplicateCount > 0) {
+                statsHtml += `
+                    <div class="stat-item warning">
+                        <div class="stat-number">${duplicateCount}</div>
+                        <div class="stat-label">Duplicates Skipped</div>
+                    </div>
+                `;
+            }
+            
+            if (errorCount > 0) {
+                statsHtml += `
+                    <div class="stat-item error">
+                        <div class="stat-number">${errorCount}</div>
+                        <div class="stat-label">Errors</div>
+                    </div>
+                `;
+            }
+            
+            statsGrid.innerHTML = statsHtml;
+            modal.style.display = 'flex';
+        }
+
+        function closeSuccessModal() {
+            document.getElementById('successModal').style.display = 'none';
+        }
+
+        function resetForm() {
+            document.getElementById('excelInput').value = '';
+            document.getElementById('fileNameDisplay').style.display = 'none';
+            hidePreview();
+            hideError();
+            document.getElementById('uploadBtn').style.display = 'none';
+            uploadedExcelData = null;
+        }
+
+        function showError(message) {
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.innerHTML = `<i class="fas fa-exclamation-triangle"></i><p>${message}</p>`;
+            errorElement.style.display = 'block';
+        }
+
+        function hideError() {
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+        function hidePreview() {
+            document.getElementById('previewSection').style.display = 'none';
+        }
+
+        // Utility functions
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-GB');
+        }
+
+        function formatCurrency(amount) {
+            return new Intl.NumberFormat('en-IN', {
+                style: 'currency',
+                currency: 'INR'
+            }).format(amount);
+        }
+    </script>
+</body>
+</html>
